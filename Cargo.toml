@@ -1,0 +1,17 @@
+[package]
+name = "frontendmap"
+version = "0.1.0"
+edition = "2024"
+description = "Frontend project satellite map — index, query, and navigate your web project"
+license = "MIT"
+keywords = ["frontend", "react", "vue", "component", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.51", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+regex = "1.11.1"
+walkdir = "2.5.0"
+ignore = "0.4.24"
