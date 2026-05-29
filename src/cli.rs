@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "frontendmap")]
-#[command(version = "0.1.0")]
+#[command(version)]
 #[command(about = "Frontend project satellite map — index, query, and navigate your web project")]
 pub struct Cli {
     #[command(subcommand)]

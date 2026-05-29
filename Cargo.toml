@@ -1,6 +1,6 @@
 [package]
 name = "frontendmap"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Frontend project satellite map — index, query, and navigate your web project"
 homepage = "https://github.com/trtyr/frontendmap"
