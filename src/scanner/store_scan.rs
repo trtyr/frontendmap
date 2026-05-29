@@ -18,6 +18,15 @@ where
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
 
     let regexes: Vec<Regex> = patterns.iter()
@@ -36,6 +45,10 @@ where
             continue;
         }
         let path = entry.path();
+        // Skip test files
+        if is_test_file(path) {
+            continue;
+        }
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -206,6 +219,15 @@ fn find_subscribers(root: &Path, store_name: &str) -> Vec<String> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     let import_re = Regex::new(&format!(r"import\s+.*{}\s+.*from", regex::escape(store_name))).expect("invalid regex pattern");
@@ -223,6 +245,11 @@ fn find_subscribers(root: &Path, store_name: &str) -> Vec<String> {
         }
         
         let path = entry.path();
+        // Skip test files
+        if is_test_file(path) {
+            continue;
+        }
+        
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -238,4 +265,18 @@ fn find_subscribers(root: &Path, store_name: &str) -> Vec<String> {
     }
     
     subscribers
+}
+
+fn is_test_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/__tests__/") || path_str.contains("\\__tests\\") {
+        return true;
+    }
+    if let Some(name) = path.file_stem() {
+        let name = name.to_string_lossy();
+        if name.ends_with(".test") || name.ends_with(".spec") {
+            return true;
+        }
+    }
+    false
 }

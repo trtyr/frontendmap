@@ -10,6 +10,15 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     // Define patterns for various HTTP clients and wrappers
@@ -48,6 +57,10 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
         }
         
         let path = entry.path();
+        // Skip test files
+        if is_test_file(path) {
+            continue;
+        }
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -190,4 +203,18 @@ fn detect_method_from_context(lines: &[&str], current_line: usize) -> String {
     }
     
     "GET".to_string()
+}
+
+fn is_test_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/__tests__/") || path_str.contains("\\__tests\\") {
+        return true;
+    }
+    if let Some(name) = path.file_stem() {
+        let name = name.to_string_lossy();
+        if name.ends_with(".test") || name.ends_with(".spec") {
+            return true;
+        }
+    }
+    false
 }

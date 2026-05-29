@@ -2,9 +2,9 @@ use anyhow::Result;
 use regex::Regex;
 use std::fs;
 use std::path::Path;
-use crate::model::Route;
+use crate::model::{Route, Framework};
 
-pub fn scan_routes(root: &Path) -> Result<Vec<Route>> {
+pub fn scan_routes(root: &Path, framework: &Framework) -> Result<Vec<Route>> {
     let mut routes = Vec::new();
     
     // Scan for various router patterns
@@ -12,9 +12,14 @@ pub fn scan_routes(root: &Path) -> Result<Vec<Route>> {
     scan_vue_router(root, &mut routes)?;
     scan_angular_router(root, &mut routes)?;
     scan_svelte_router(root, &mut routes)?;
-    scan_next_pages(root, &mut routes)?;
-    scan_nuxt_pages(root, &mut routes)?;
-    scan_sveltekit_routes(root, &mut routes)?;
+    
+    // Only scan file-based routes for frameworks that use them
+    match framework {
+        Framework::Next => scan_next_pages(root, &mut routes)?,
+        Framework::Nuxt => scan_nuxt_pages(root, &mut routes)?,
+        Framework::SvelteKit => scan_sveltekit_routes(root, &mut routes)?,
+        _ => {} // React/Vue/Angular/Svelte don't use file-based routing by default
+    }
     
     Ok(routes)
 }
@@ -23,6 +28,15 @@ fn scan_react_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     // Pattern for React Router v6: <Route path="/xxx" element={<Component />} />
@@ -31,6 +45,8 @@ fn scan_react_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let config_re = Regex::new(r#"\{\s*path\s*:\s*["']([^"']+)["']\s*,\s*element\s*:\s*(?:<)?(\w+)"#).expect("invalid regex pattern");
     // Pattern for createBrowserRouter: { path: '/xxx', element: <Component /> }
     let browser_router_re = Regex::new(r#"\{\s*path\s*:\s*["']([^"']+)["']\s*,\s*element\s*:\s*<(\w+)"#).expect("invalid regex pattern");
+    // Pattern for import statements (to skip)
+    let import_re = Regex::new(r#"^\s*import\s"#).expect("invalid regex pattern");
     
     for entry in walker {
         let entry = match entry {
@@ -43,6 +59,11 @@ fn scan_react_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
         }
         
         let path = entry.path();
+        // Skip test files
+        if is_test_file(path) {
+            continue;
+        }
+        
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -51,6 +72,11 @@ fn scan_react_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
         let lines: Vec<&str> = content.lines().collect();
         
         for (line_num, line) in lines.iter().enumerate() {
+            // Skip import lines
+            if import_re.is_match(line) {
+                continue;
+            }
+            
             if let Some(caps) = route_v6_re.captures(line) {
                 routes.push(Route {
                     path: caps[1].to_string(),
@@ -79,10 +105,33 @@ fn scan_react_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     Ok(())
 }
 
+fn is_test_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/__tests__/") || path_str.contains("\\__tests\\") {
+        return true;
+    }
+    if let Some(name) = path.file_stem() {
+        let name = name.to_string_lossy();
+        if name.ends_with(".test") || name.ends_with(".spec") {
+            return true;
+        }
+    }
+    false
+}
+
 fn scan_vue_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     // Pattern for Vue Router array config (multiline)
@@ -99,6 +148,12 @@ fn scan_vue_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
         };
         
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        
+        let path = entry.path();
+        // Skip test files
+        if is_test_file(path) {
             continue;
         }
         
@@ -176,6 +231,15 @@ fn scan_angular_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     // Pattern for Angular routes: { path: 'xxx', component: XxxComponent }
@@ -188,6 +252,12 @@ fn scan_angular_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
         };
         
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        
+        let path = entry.path();
+        // Skip test files
+        if is_test_file(path) {
             continue;
         }
         
@@ -264,6 +334,15 @@ fn scan_directory_routes(dir: &Path, root: &Path, routes: &mut Vec<Route>, frame
     let walker = ignore::WalkBuilder::new(dir)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     for entry in walker {
@@ -282,6 +361,11 @@ fn scan_directory_routes(dir: &Path, root: &Path, routes: &mut Vec<Route>, frame
         // Skip non-page files
         let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         if filename.starts_with('_') || filename.starts_with('.') {
+            continue;
+        }
+        
+        // Skip test files
+        if is_test_file(path) {
             continue;
         }
         

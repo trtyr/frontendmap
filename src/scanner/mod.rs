@@ -21,7 +21,7 @@ pub fn scan(project_path: &str) -> Result<FrontendMap> {
     project_info.component_count = components.len();
     
     // Scan routes
-    let routes = route::scan_routes(root)?;
+    let routes = route::scan_routes(root, &project_info.framework)?;
     
     // Scan API calls
     let api_calls = api::scan_api_calls(root)?;

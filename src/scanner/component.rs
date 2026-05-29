@@ -13,6 +13,15 @@ pub fn scan_components(root: &Path) -> Result<Vec<Component>> {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
     for entry in walker {
@@ -49,6 +58,11 @@ pub fn scan_components(root: &Path) -> Result<Vec<Component>> {
 }
 
 fn is_component_file(path: &Path) -> bool {
+    // Skip test files
+    if is_test_file(path) {
+        return false;
+    }
+    
     if let Some(ext) = path.extension() {
         let ext = ext.to_string_lossy().to_lowercase();
         matches!(ext.as_str(), "jsx" | "tsx" | "vue" | "svelte" | "astro")
@@ -66,6 +80,27 @@ fn is_component_file(path: &Path) -> bool {
         }
         false
     }
+}
+
+fn is_test_file(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    // Skip __tests__ directories
+    if path_str.contains("/__tests__/") || path_str.contains("\\__tests\\") {
+        return true;
+    }
+    // Skip .test.* and .spec.* files
+    if let Some(name) = path.file_stem() {
+        let name = name.to_string_lossy();
+        if name.ends_with(".test") || name.ends_with(".spec") {
+            return true;
+        }
+    }
+    false
+}
+
+fn should_skip_dir(path: &Path) -> bool {
+    let dir_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    matches!(dir_name, "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
 }
 
 fn extract_components(file_path: &Path, content: &str) -> Vec<Component> {
@@ -101,6 +136,7 @@ fn extract_components(file_path: &Path, content: &str) -> Vec<Component> {
     ];
     
     let lines: Vec<&str> = content.lines().collect();
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     
     for (line_num, line) in lines.iter().enumerate() {
         let line = line.trim();
@@ -109,7 +145,8 @@ fn extract_components(file_path: &Path, content: &str) -> Vec<Component> {
             if let Ok(re) = Regex::new(pattern) {
                 if let Some(caps) = re.captures(line) {
                     let name = caps[1].to_string();
-                    if is_component_name(&name) {
+                    if is_component_name(&name) && !seen_names.contains(&name) {
+                        seen_names.insert(name.clone());
                         let props = extract_js_props(content, &name);
                         components.push(Component {
                             name,
@@ -244,7 +281,14 @@ fn is_component_name(name: &str) -> bool {
     // Component names should start with uppercase
     // Skip common non-component exports
     let skip_names = ["default", "props", "emits", "setup", "data", "methods", "computed", "watch"];
-    !skip_names.contains(&name) && name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+    if skip_names.contains(&name) {
+        return false;
+    }
+    // Skip UPPER_CASE constants (e.g., NAV_LINK_CLASS, API_URL)
+    if name.chars().all(|c| c.is_uppercase() || c == '_' || c.is_numeric()) {
+        return false;
+    }
+    name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
 }
 
 fn extract_js_props(content: &str, component_name: &str) -> Vec<Prop> {
@@ -254,7 +298,7 @@ fn extract_js_props(content: &str, component_name: &str) -> Vec<Prop> {
     let destructure_re = Regex::new(&format!(r"{}\s*\(\s*\{{([^}}]*)\}}", regex::escape(component_name))).expect("invalid regex pattern");
     
     // Pattern 2: function Component(props: { prop1: type1, prop2: type2 })
-    let type_re = Regex::new(&format!(r"{}\s*\(\s*(?:props|{{[^}}]*}})\s*:\s*\{{([^}}]*)\}}", regex::escape(component_name))).expect("invalid regex pattern");
+    let type_re = Regex::new(&format!(r"{}\s*\(\s*(?:props|\{{[^}}]*\}})\s*:\s*\{{([^}}]*)\}}", regex::escape(component_name))).expect("invalid regex pattern");
     
     // Pattern 3: interface Props { ... } or type Props = { ... }
     let interface_re = Regex::new(r"(?:interface|type)\s+(?:Props|IProps)\s*(?:=\s*)?\{([^}]+)\}").expect("invalid regex pattern");
@@ -449,9 +493,19 @@ fn build_references(components: &mut Vec<Component>, root: &Path) {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .git_ignore(true)
+        .add_custom_ignore_filename(".gitignore")
+        .filter_entry(|e| {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy();
+                !matches!(name.as_ref(), "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
+            } else {
+                true
+            }
+        })
         .build();
     
-    let mut references: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    // file -> set of component names it references
+    let mut file_refs: HashMap<PathBuf, Vec<String>> = HashMap::new();
     
     for entry in walker {
         let entry = match entry {
@@ -469,6 +523,11 @@ fn build_references(components: &mut Vec<Component>, root: &Path) {
             Err(_) => continue,
         };
         
+        // Skip test files for reference tracking
+        if is_test_file(path) {
+            continue;
+        }
+        
         // Check for component usage in JSX/Vue/Svelte
         for comp_name in &component_names {
             // Pattern 1: <ComponentName or <ComponentName>
@@ -484,15 +543,35 @@ fn build_references(components: &mut Vec<Component>, root: &Path) {
             let default_import_re = Regex::new(&default_import_pattern).expect("invalid regex pattern");
             
             if jsx_re.is_match(&content) || import_re.is_match(&content) || default_import_re.is_match(&content) {
-                references.entry(comp_name.clone()).or_default().push(path.to_path_buf());
+                file_refs.entry(path.to_path_buf()).or_default().push(comp_name.clone());
             }
         }
     }
     
+    // Build component name -> file mapping (clone to avoid borrow conflict)
+    let comp_files: HashMap<String, PathBuf> = components.iter()
+        .map(|c| (c.name.clone(), c.file.clone()))
+        .collect();
+    
     // Update components with references
     for comp in components.iter_mut() {
-        if let Some(refs) = references.get(&comp.name) {
-            comp.used_by = refs.clone();
+        let comp_path = comp.file.to_string_lossy().to_string();
+        
+        // used_by: other files that reference this component
+        for (file_path, refs) in &file_refs {
+            let file_str = file_path.to_string_lossy().to_string();
+            if refs.contains(&comp.name) && file_str != comp_path {
+                comp.used_by.push(file_path.clone());
+            }
+        }
+        
+        // uses: components referenced by this file
+        if let Some(refs) = file_refs.get(&comp.file) {
+            for ref_name in refs {
+                if ref_name != &comp.name && comp_files.contains_key(ref_name) {
+                    comp.uses.push(ref_name.clone());
+                }
+            }
         }
     }
 }
