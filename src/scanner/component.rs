@@ -11,7 +11,7 @@ pub fn scan_components(root: &Path) -> Result<Vec<Component>> {
     
     // Walk through all JS/TS/JSX/TSX/Vue/Svelte files
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -98,10 +98,6 @@ fn is_test_file(path: &Path) -> bool {
     false
 }
 
-fn should_skip_dir(path: &Path) -> bool {
-    let dir_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    matches!(dir_name, "node_modules" | "dist" | "build" | ".next" | ".nuxt" | ".svelte-kit" | ".git" | ".svn" | "vendor" | "coverage" | "__pycache__" | ".cache")
-}
 
 fn extract_components(file_path: &Path, content: &str) -> Vec<Component> {
     let mut components = Vec::new();
@@ -117,22 +113,22 @@ fn extract_components(file_path: &Path, content: &str) -> Vec<Component> {
         }
     }
     
-    // JS/TS component extraction patterns
-    let patterns = vec![
+    // JS/TS component extraction patterns (pre-compiled)
+    let patterns: Vec<(Regex, ComponentKind)> = vec![
         // Pattern 1: export default function ComponentName
-        (r"export\s+default\s+(?:async\s+)?function\s+(\w+)", ComponentKind::Function),
+        (Regex::new(r"export\s+default\s+(?:async\s+)?function\s+(\w+)").expect("invalid regex pattern"), ComponentKind::Function),
         // Pattern 2: export const ComponentName = () =>
-        (r"export\s+const\s+(\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>", ComponentKind::Arrow),
+        (Regex::new(r"export\s+const\s+(\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>").expect("invalid regex pattern"), ComponentKind::Arrow),
         // Pattern 3: export function ComponentName
-        (r"export\s+(?:async\s+)?function\s+(\w+)", ComponentKind::Function),
+        (Regex::new(r"export\s+(?:async\s+)?function\s+(\w+)").expect("invalid regex pattern"), ComponentKind::Function),
         // Pattern 4: export default ComponentName (for class components)
-        (r"export\s+default\s+class\s+(\w+)", ComponentKind::Class),
+        (Regex::new(r"export\s+default\s+class\s+(\w+)").expect("invalid regex pattern"), ComponentKind::Class),
         // Pattern 5: export class ComponentName
-        (r"export\s+class\s+(\w+)", ComponentKind::Class),
+        (Regex::new(r"export\s+class\s+(\w+)").expect("invalid regex pattern"), ComponentKind::Class),
         // Pattern 6: const ComponentName = () => ... export default ComponentName
-        (r"const\s+(\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>", ComponentKind::Arrow),
+        (Regex::new(r"const\s+(\w+)\s*=\s*(?:\([^)]*\)|[a-zA-Z_]\w*)\s*=>").expect("invalid regex pattern"), ComponentKind::Arrow),
         // Pattern 7: function ComponentName() { ... } export default ComponentName
-        (r"(?:async\s+)?function\s+(\w+)\s*\(", ComponentKind::Function),
+        (Regex::new(r"(?:async\s+)?function\s+(\w+)\s*\(").expect("invalid regex pattern"), ComponentKind::Function),
     ];
     
     let lines: Vec<&str> = content.lines().collect();
@@ -141,23 +137,21 @@ fn extract_components(file_path: &Path, content: &str) -> Vec<Component> {
     for (line_num, line) in lines.iter().enumerate() {
         let line = line.trim();
         
-        for (pattern, kind) in &patterns {
-            if let Ok(re) = Regex::new(pattern) {
-                if let Some(caps) = re.captures(line) {
-                    let name = caps[1].to_string();
-                    if is_component_name(&name) && !seen_names.contains(&name) {
-                        seen_names.insert(name.clone());
-                        let props = extract_js_props(content, &name);
-                        components.push(Component {
-                            name,
-                            file: file_path.to_path_buf(),
-                            kind: kind.clone(),
-                            props,
-                            used_by: Vec::new(),
-                            uses: Vec::new(),
-                            line: line_num + 1,
-                        });
-                    }
+        for (re, kind) in &patterns {
+            if let Some(caps) = re.captures(line) {
+                let name = caps[1].to_string();
+                if is_component_name(&name) && !seen_names.contains(&name) {
+                    seen_names.insert(name.clone());
+                    let props = extract_js_props(content, &name);
+                    components.push(Component {
+                        name,
+                        file: file_path.to_path_buf(),
+                        kind: kind.clone(),
+                        props,
+                        used_by: Vec::new(),
+                        uses: Vec::new(),
+                        line: line_num + 1,
+                    });
                 }
             }
         }
@@ -491,7 +485,7 @@ fn build_references(components: &mut Vec<Component>, root: &Path) {
     
     // Walk through all files to find references
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -504,6 +498,21 @@ fn build_references(components: &mut Vec<Component>, root: &Path) {
         })
         .build();
     
+    // Pre-compile regex patterns for each component name
+    let mut compiled_patterns: Vec<(Regex, Regex, Regex)> = Vec::with_capacity(component_names.len());
+    for comp_name in &component_names {
+        // Pattern 1: <ComponentName or <ComponentName>
+        let jsx_re = Regex::new(&format!(r"<{}", regex::escape(comp_name))).expect("invalid regex pattern");
+        // Pattern 2: import { ComponentName } from
+        let import_re = Regex::new(&format!(r"import\s+.*{}\s+.*from", regex::escape(comp_name))).expect("invalid regex pattern");
+        // Pattern 3: import ComponentName from
+        let default_import_re = Regex::new(&format!(r"import\s+{}\s+from", regex::escape(comp_name))).expect("invalid regex pattern");
+        compiled_patterns.push((jsx_re, import_re, default_import_re));
+    }
+
+    // Allowed source file extensions for reference tracking
+    let source_extensions = ["js", "jsx", "ts", "tsx", "vue", "svelte", "astro"];
+
     // file -> set of component names it references
     let mut file_refs: HashMap<PathBuf, Vec<String>> = HashMap::new();
     
@@ -527,21 +536,20 @@ fn build_references(components: &mut Vec<Component>, root: &Path) {
         if is_test_file(path) {
             continue;
         }
+
+        // Skip non-source files
+        let is_source = path.extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| source_extensions.contains(&ext.to_lowercase().as_str()))
+            .unwrap_or(false);
+        if !is_source {
+            continue;
+        }
         
         // Check for component usage in JSX/Vue/Svelte
-        for comp_name in &component_names {
-            // Pattern 1: <ComponentName or <ComponentName>
-            let jsx_pattern = format!(r"<{}", regex::escape(comp_name));
-            let jsx_re = Regex::new(&jsx_pattern).expect("invalid regex pattern");
-            
-            // Pattern 2: import { ComponentName } from
-            let import_pattern = format!(r"import\s+.*{}\s+.*from", regex::escape(comp_name));
-            let import_re = Regex::new(&import_pattern).expect("invalid regex pattern");
-            
-            // Pattern 3: import ComponentName from
-            let default_import_pattern = format!(r"import\s+{}\s+from", regex::escape(comp_name));
-            let default_import_re = Regex::new(&default_import_pattern).expect("invalid regex pattern");
-            
+        for (idx, comp_name) in component_names.iter().enumerate() {
+            let (ref jsx_re, ref import_re, ref default_import_re) = compiled_patterns[idx];
+
             if jsx_re.is_match(&content) || import_re.is_match(&content) || default_import_re.is_match(&content) {
                 file_refs.entry(path.to_path_buf()).or_default().push(comp_name.clone());
             }

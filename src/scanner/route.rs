@@ -2,6 +2,7 @@ use anyhow::Result;
 use regex::Regex;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 use crate::model::{Route, Framework};
 
 pub fn scan_routes(root: &Path, framework: &Framework) -> Result<Vec<Route>> {
@@ -26,7 +27,7 @@ pub fn scan_routes(root: &Path, framework: &Framework) -> Result<Vec<Route>> {
 
 fn scan_react_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -121,7 +122,7 @@ fn is_test_file(path: &Path) -> bool {
 
 fn scan_vue_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -229,7 +230,7 @@ fn scan_vue_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
 
 fn scan_angular_router(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -332,7 +333,7 @@ fn scan_sveltekit_routes(root: &Path, routes: &mut Vec<Route>) -> Result<()> {
 
 fn scan_directory_routes(dir: &Path, root: &Path, routes: &mut Vec<Route>, framework: &str) -> Result<()> {
     let walker = ignore::WalkBuilder::new(dir)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -399,6 +400,9 @@ fn scan_directory_routes(dir: &Path, root: &Path, routes: &mut Vec<Route>, frame
     Ok(())
 }
 
+static DYNAMIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[(\w+)\]").expect("invalid regex pattern"));
+static CATCH_ALL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\.\.\.(\w+)\]").expect("invalid regex pattern"));
+
 fn file_to_route_path(relative: &Path, framework: &str) -> String {
     let mut parts = Vec::new();
     
@@ -421,10 +425,8 @@ fn file_to_route_path(relative: &Path, framework: &str) -> String {
     let path = match framework {
         "next" | "nuxt" | "sveltekit" => {
             // [id] -> :id, [...slug] -> *slug
-            let dynamic_re = Regex::new(r"\[(\w+)\]").expect("invalid regex pattern");
-            let catch_all_re = Regex::new(r"\[\.\.\.(\w+)\]").expect("invalid regex pattern");
-            let path = dynamic_re.replace_all(&path, ":$1").to_string();
-            catch_all_re.replace_all(&path, "*$1").to_string()
+            let path = DYNAMIC_RE.replace_all(&path, ":$1").to_string();
+            CATCH_ALL_RE.replace_all(&path, "*$1").to_string()
         }
         _ => path,
     };

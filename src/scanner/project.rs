@@ -324,7 +324,7 @@ fn detect_framework_from_json(json: &Value) -> Framework {
 
 fn count_files(root: &Path) -> usize {
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .build();
     

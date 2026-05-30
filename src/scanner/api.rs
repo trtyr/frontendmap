@@ -8,7 +8,7 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
     let mut api_calls = Vec::new();
     
     let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(true)
         .git_ignore(true)
         .add_custom_ignore_filename(".gitignore")
         .filter_entry(|e| {
@@ -21,29 +21,29 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
         })
         .build();
     
-    // Define patterns for various HTTP clients and wrappers
-    let patterns = vec![
+    // Define patterns for various HTTP clients and wrappers (pre-compiled)
+    let patterns: Vec<(Regex, &str, &str)> = vec![
         // Standard fetch
-        (r#"fetch\s*\(\s*["']([^"']+)["']"#, "fetch", "GET"),
+        (Regex::new(r#"fetch\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "fetch", "GET"),
         // Axios
-        (r#"axios\.(get|post|put|delete|patch|head|options)\s*\(\s*["']([^"']+)["']"#, "axios", ""),
+        (Regex::new(r#"axios\.(get|post|put|delete|patch|head|options)\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "axios", ""),
         // Ky
-        (r#"ky\.(get|post|put|delete|patch|head)\s*\(\s*["']([^"']+)["']"#, "ky", ""),
+        (Regex::new(r#"ky\.(get|post|put|delete|patch|head)\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "ky", ""),
         // Got
-        (r#"got\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#, "got", ""),
+        (Regex::new(r#"got\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "got", ""),
         // Superagent
-        (r#"superagent\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#, "superagent", ""),
+        (Regex::new(r#"superagent\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "superagent", ""),
         // OFetch (Nuxt/Vite)
-        (r#"ofetch\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#, "ofetch", ""),
+        (Regex::new(r#"ofetch\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "ofetch", ""),
         // Custom wrappers (common patterns)
-        (r#"(?:request|apiFetch|httpClient|api|fetchApi|makeRequest)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']"#, "custom", "GET"),
+        (Regex::new(r#"(?:request|apiFetch|httpClient|api|fetchApi|makeRequest)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"), "custom", "GET"),
         // GraphQL
-        (r#"useQuery\s*\(\s*gql`\s*(?:query\s+)?(\w+)"#, "graphql", "QUERY"),
-        (r#"useMutation\s*\(\s*gql`\s*mutation\s+(\w+)"#, "graphql", "MUTATION"),
-        (r#"gql`\s*(?:query|mutation)\s+(\w+)"#, "graphql", ""),
+        (Regex::new(r#"useQuery\s*\(\s*gql`\s*(?:query\s+)?(\w+)"#).expect("invalid regex pattern"), "graphql", "QUERY"),
+        (Regex::new(r#"useMutation\s*\(\s*gql`\s*mutation\s+(\w+)"#).expect("invalid regex pattern"), "graphql", "MUTATION"),
+        (Regex::new(r#"gql`\s*(?:query|mutation)\s+(\w+)"#).expect("invalid regex pattern"), "graphql", ""),
         // React Query / TanStack Query
-        (r#"queryKey\s*:\s*\[["']([^"']+)["']"#, "react-query", "GET"),
-        (r#"mutationKey\s*:\s*\[["']([^"']+)["']"#, "react-query", "MUTATION"),
+        (Regex::new(r#"queryKey\s*:\s*\[["']([^"']+)["']"#).expect("invalid regex pattern"), "react-query", "GET"),
+        (Regex::new(r#"mutationKey\s*:\s*\[["']([^"']+)["']"#).expect("invalid regex pattern"), "react-query", "MUTATION"),
     ];
     
     for entry in walker {
@@ -75,8 +75,7 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
         let lines: Vec<&str> = content.lines().collect();
         
         for (line_num, line) in lines.iter().enumerate() {
-            for (pattern, client, default_method) in &patterns {
-                if let Ok(re) = Regex::new(pattern) {
+            for (re, client, default_method) in &patterns {
                     if let Some(caps) = re.captures(line) {
                         let endpoint = if caps.len() > 2 {
                             caps[2].to_string()
@@ -106,7 +105,6 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
                             line: line_num + 1,
                         });
                     }
-                }
             }
         }
         
@@ -118,18 +116,17 @@ pub fn scan_api_calls(root: &Path) -> Result<Vec<ApiCall>> {
 }
 
 fn scan_api_functions(content: &str, path: &Path, module_name: &str, api_calls: &mut Vec<ApiCall>) {
-    // Pattern for exported API functions
+    // Pattern for exported API functions (pre-compiled)
     let func_patterns = vec![
         // export async function fetchXxx() { return request('/api/xxx') }
-        r#"export\s+(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*(?:request|apiFetch|fetch|axios)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']"#,
+        Regex::new(r#"export\s+(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*(?:request|apiFetch|fetch|axios)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"),
         // export const fetchXxx = async () => { return request('/api/xxx') }
-        r#"export\s+const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>\s*\{[^}]*(?:request|apiFetch|fetch|axios)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']"#,
+        Regex::new(r#"export\s+const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>\s*\{[^}]*(?:request|apiFetch|fetch|axios)\s*(?:<[^>]*>)?\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"),
         // export function getXxx() { return api.get('/api/xxx') }
-        r#"export\s+(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*\w+\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#,
+        Regex::new(r#"export\s+(?:async\s+)?function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*\w+\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).expect("invalid regex pattern"),
     ];
     
-    for pattern in func_patterns {
-        if let Ok(re) = Regex::new(pattern) {
+    for re in func_patterns {
             for caps in re.captures_iter(content) {
                 let func_name = caps[1].to_string();
                 let endpoint = if caps.len() > 3 {
@@ -152,7 +149,6 @@ fn scan_api_functions(content: &str, path: &Path, module_name: &str, api_calls: 
                     line,
                 });
             }
-        }
     }
 }
 
